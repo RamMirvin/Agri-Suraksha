@@ -1,4 +1,4 @@
-"""SatCrop Digital Twin: hackathon prototype.
+"""agri Suraksha: farm safety and risk assistant.
 
 Run with:  streamlit run app.py
 Weather is live (Open-Meteo, or OpenWeatherMap with your own key). Land records, market prices and
@@ -11,6 +11,7 @@ import random
 import re
 import zlib
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote_plus
 
 import folium
 import numpy as np
@@ -19,7 +20,7 @@ import requests
 import streamlit as st
 from streamlit_folium import st_folium
 
-st.set_page_config(page_title="SatCrop Digital Twin", page_icon="🛰️",
+st.set_page_config(page_title="agri Suraksha", page_icon="🔥",
                    layout="wide", initial_sidebar_state="expanded")
 
 _VER = tuple(int(x) for x in st.__version__.split(".")[:2] if x.isdigit())
@@ -114,6 +115,194 @@ textarea{font-family:ui-monospace,Menlo,Consolas,monospace !important;font-size:
 </style>
 """
 st.markdown(CSS, unsafe_allow_html=True)
+
+# The interface language is separate from the farmer's SMS/voice alert language.
+# These translations cover the navigation and the most important page controls.
+UI_LANGUAGES = [
+    "English", "हिन्दी (Hindi)", "தமிழ் (Tamil)", "తెలుగు (Telugu)", "ಕನ್ನಡ (Kannada)",
+    "മലയാളം (Malayalam)", "বাংলা (Bengali)", "मराठी (Marathi)", "ગુજરાતી (Gujarati)",
+    "ਪੰਜਾਬੀ (Punjabi)", "ଓଡ଼ିଆ (Odia)",
+]
+UI_TEXT = {
+    "English": {
+        "brand_sub": "Farm safety and risk assistant", "interface_language": "Interface language",
+        "navigate": "Navigate", "nav_dashboard": "Dashboard", "nav_advisory": "Suggestions & Advisory",
+        "nav_schemes": "Schemes", "nav_settings": "Settings", "nav_disease": "Disease Detection",
+        "emergency_sos": "🆘  Emergency SOS", "dashboard_title": "agri Suraksha dashboard",
+        "dashboard_sub": "Farm risk, live weather and local alerts", "advisory_title": "Suggestions and advisory",
+        "advisory_sub": "Step-by-step precautions for hazards in your live forecast, plus where to sell.",
+        "schemes_title": "Schemes", "schemes_sub": "Subsidies, insurance and disaster relief matched to your farm profile.",
+        "settings_title": "Settings and offline mode", "settings_sub": "Your farm profile drives the map, advisory, prices and scheme matching.",
+        "disease_sub": "Upload a crop-leaf photo for an illustrative sample diagnosis and practical next steps.",
+        "upload_label": "Upload or take a photo of a crop leaf", "crop_label": "Crop in the photo",
+        "diagnose_button": "Show sample diagnosis", "sample_notice": "Demo only: this prototype does not analyze image pixels. The sample result is selected deterministically from the uploaded file; confirm symptoms with a local KVK or agronomist.",
+        "result_title": "Sample diagnostic result", "severity": "Severity", "organic": "Organic / cultural steps",
+        "chemical": "Chemical control steps", "safety": "Spray safety", "video": "Treatment video guides",
+        "video_link": "Find a treatment tutorial on YouTube", "no_upload": "Upload a clear photo to see a sample result.",
+    },
+    "हिन्दी (Hindi)": {
+        "brand_sub": "फसल सुरक्षा और जोखिम सहायक", "interface_language": "इंटरफ़ेस भाषा", "navigate": "नेविगेट करें",
+        "nav_dashboard": "डैशबोर्ड", "nav_advisory": "सुझाव और सलाह", "nav_schemes": "योजनाएँ",
+        "nav_settings": "सेटिंग्स", "nav_disease": "रोग पहचान", "emergency_sos": "🆘  आपातकालीन सहायता",
+        "dashboard_title": "अग्नि सुरक्षा डैशबोर्ड", "dashboard_sub": "खेत का जोखिम, मौसम और स्थानीय अलर्ट",
+        "advisory_title": "सुझाव और सलाह", "advisory_sub": "मौसम पूर्वानुमान के खतरों से बचाव के चरण और बिक्री सुझाव।",
+        "schemes_title": "योजनाएँ", "schemes_sub": "आपके खेत के अनुसार सब्सिडी, बीमा और आपदा राहत।",
+        "settings_title": "सेटिंग्स और ऑफ़लाइन मोड", "settings_sub": "आपकी खेत प्रोफ़ाइल नक्शे, सलाह, कीमतों और योजना मिलान को संचालित करती है।",
+        "disease_sub": "पत्ती की तस्वीर अपलोड करें और नमूना निदान व अगले कदम देखें।", "upload_label": "फसल की पत्ती की तस्वीर अपलोड करें या लें",
+        "crop_label": "तस्वीर में फसल", "diagnose_button": "नमूना निदान दिखाएँ",
+        "sample_notice": "केवल डेमो: यह प्रोटोटाइप तस्वीर के पिक्सेल का विश्लेषण नहीं करता। परिणाम अपलोड की गई फ़ाइल से नमूने के रूप में चुना जाता है; स्थानीय कृषि विशेषज्ञ से पुष्टि करें।",
+        "result_title": "नमूना निदान परिणाम", "severity": "गंभीरता", "organic": "जैविक / खेती के तरीके",
+        "chemical": "रासायनिक नियंत्रण के चरण", "safety": "छिड़काव सुरक्षा", "video": "उपचार वीडियो मार्गदर्शिकाएँ",
+        "video_link": "YouTube पर उपचार ट्यूटोरियल खोजें", "no_upload": "नमूना परिणाम देखने के लिए साफ तस्वीर अपलोड करें।",
+    },
+    "தமிழ் (Tamil)": {
+        "brand_sub": "பயிர் பாதுகாப்பு மற்றும் இடர் உதவியாளர்", "interface_language": "இடைமுக மொழி", "navigate": "செல்லவும்",
+        "nav_dashboard": "முகப்பு", "nav_advisory": "பரிந்துரைகள்", "nav_schemes": "திட்டங்கள்", "nav_settings": "அமைப்புகள்",
+        "nav_disease": "நோய் கண்டறிதல்", "emergency_sos": "🆘  அவசர உதவி", "dashboard_title": "அக்னி சுரக்ஷா முகப்பு",
+        "dashboard_sub": "பண்ணை இடர், நேரடி வானிலை மற்றும் உள்ளூர் எச்சரிக்கைகள்", "advisory_title": "பரிந்துரைகள் மற்றும் ஆலோசனை",
+        "advisory_sub": "வானிலை அபாயங்களுக்கான படிப்படியான முன்னெச்சரிக்கைகள் மற்றும் விற்பனை ஆலோசனை.", "schemes_title": "திட்டங்கள்",
+        "schemes_sub": "உங்கள் பண்ணைக்குப் பொருந்தும் மானியம், காப்பீடு மற்றும் பேரிடர் நிவாரணம்.", "settings_title": "அமைப்புகள் மற்றும் இணையமில்லா பயன்முறை",
+        "settings_sub": "உங்கள் பண்ணை விவரம் வரைபடம், ஆலோசனை, விலை மற்றும் திட்டப் பொருத்தத்தை இயக்குகிறது.",
+        "disease_sub": "இலைப் படத்தைப் பதிவேற்றி மாதிரி நோய் கண்டறிதல் மற்றும் அடுத்த படிகளைப் பார்க்கவும்.",
+        "upload_label": "பயிர் இலையின் படத்தைப் பதிவேற்றவும் அல்லது எடுக்கவும்", "crop_label": "படத்தில் உள்ள பயிர்",
+        "diagnose_button": "மாதிரி முடிவைக் காட்டு", "sample_notice": "டெமோ மட்டும்: இந்த முன்மாதிரி படத்தை ஆய்வு செய்யாது. பதிவேற்றிய கோப்பின் அடிப்படையில் மாதிரி முடிவு காட்டப்படும்; உள்ளூர் வேளாண் நிபுணரிடம் உறுதிப்படுத்தவும்.",
+        "result_title": "மாதிரி கண்டறிதல் முடிவு", "severity": "தீவிரம்", "organic": "இயற்கை / சாகுபடி முறைகள்",
+        "chemical": "ரசாயனக் கட்டுப்பாட்டு படிகள்", "safety": "தெளிப்பு பாதுகாப்பு", "video": "சிகிச்சை காணொளி வழிகாட்டிகள்",
+        "video_link": "YouTube-இல் சிகிச்சை வழிகாட்டியைத் தேடவும்", "no_upload": "மாதிரி முடிவைக் காண தெளிவான படத்தைப் பதிவேற்றவும்.",
+    },
+    "తెలుగు (Telugu)": {
+        "brand_sub": "పంట రక్షణ మరియు ప్రమాద సహాయకం", "interface_language": "ఇంటర్‌ఫేస్ భాష", "navigate": "వెళ్లండి",
+        "nav_dashboard": "డ్యాష్‌బోర్డ్", "nav_advisory": "సూచనలు", "nav_schemes": "పథకాలు", "nav_settings": "సెట్టింగ్‌లు",
+        "nav_disease": "వ్యాధి గుర్తింపు", "emergency_sos": "🆘  అత్యవసర సహాయం", "dashboard_title": "అగ్ని సురక్ష డ్యాష్‌బోర్డ్",
+        "dashboard_sub": "పొలం ప్రమాదం, ప్రత్యక్ష వాతావరణం మరియు స్థానిక హెచ్చరికలు", "advisory_title": "సూచనలు మరియు సలహా",
+        "advisory_sub": "వాతావరణ ప్రమాదాల నివారణ చర్యలు మరియు విక్రయ సూచనలు.", "schemes_title": "పథకాలు",
+        "schemes_sub": "మీ పొలానికి సరిపోయే సబ్సిడీలు, బీమా మరియు విపత్తు సహాయం.", "settings_title": "సెట్టింగ్‌లు మరియు ఆఫ్‌లైన్ మోడ్",
+        "settings_sub": "మీ పొలం వివరాలు మ్యాప్, సలహా, ధరలు మరియు పథక సరిపోలికను నడిపిస్తాయి.",
+        "disease_sub": "ఆకు ఫోటోను అప్‌లోడ్ చేసి నమూనా నిర్ధారణ మరియు తదుపరి చర్యలను చూడండి.", "upload_label": "పంట ఆకు ఫోటోను అప్‌లోడ్ చేయండి లేదా తీయండి",
+        "crop_label": "ఫోటోలోని పంట", "diagnose_button": "నమూనా నిర్ధారణ చూపించు", "sample_notice": "డెమో మాత్రమే: ఈ నమూనా చిత్రాన్ని విశ్లేషించదు. ఫైల్ ఆధారంగా ఉదాహరణ ఫలితం చూపుతుంది; స్థానిక వ్యవసాయ నిపుణుడితో నిర్ధారించండి.",
+        "result_title": "నమూనా నిర్ధారణ ఫలితం", "severity": "తీవ్రత", "organic": "సేంద్రియ / సాగు చర్యలు",
+        "chemical": "రసాయన నియంత్రణ చర్యలు", "safety": "పిచికారీ భద్రత", "video": "చికిత్స వీడియో మార్గదర్శకాలు",
+        "video_link": "YouTubeలో చికిత్స మార్గదర్శిని వెతకండి", "no_upload": "నమూనా ఫలితం కోసం స్పష్టమైన ఫోటోను అప్‌లోడ్ చేయండి.",
+    },
+    "ಕನ್ನಡ (Kannada)": {
+        "brand_sub": "ಬೆಳೆ ಸುರಕ್ಷತೆ ಮತ್ತು ಅಪಾಯ ಸಹಾಯಕ", "interface_language": "ಇಂಟರ್ಫೇಸ್ ಭಾಷೆ", "navigate": "ನ್ಯಾವಿಗೇಟ್ ಮಾಡಿ",
+        "nav_dashboard": "ಡ್ಯಾಶ್‌ಬೋರ್ಡ್", "nav_advisory": "ಸಲಹೆಗಳು", "nav_schemes": "ಯೋಜನೆಗಳು", "nav_settings": "ಸೆಟ್ಟಿಂಗ್‌ಗಳು",
+        "nav_disease": "ರೋಗ ಪತ್ತೆ", "emergency_sos": "🆘  ತುರ್ತು ಸಹಾಯ", "dashboard_title": "ಅಗ್ನಿ ಸುರಕ್ಷಾ ಡ್ಯಾಶ್‌ಬೋರ್ಡ್",
+        "dashboard_sub": "ಕೃಷಿ ಅಪಾಯ, ನೇರ ಹವಾಮಾನ ಮತ್ತು ಸ್ಥಳೀಯ ಎಚ್ಚರಿಕೆಗಳು", "advisory_title": "ಸಲಹೆಗಳು ಮತ್ತು ಮಾರ್ಗದರ್ಶನ",
+        "advisory_sub": "ಹವಾಮಾನ ಅಪಾಯಗಳ ತಡೆ ಕ್ರಮಗಳು ಮತ್ತು ಮಾರಾಟ ಸಲಹೆಗಳು.", "schemes_title": "ಯೋಜನೆಗಳು",
+        "schemes_sub": "ನಿಮ್ಮ ಕೃಷಿಗೆ ಹೊಂದುವ ಸಹಾಯಧನ, ವಿಮೆ ಮತ್ತು ವಿಪತ್ತು ಪರಿಹಾರ.", "settings_title": "ಸೆಟ್ಟಿಂಗ್‌ಗಳು ಮತ್ತು ಆಫ್‌ಲೈನ್ ಮೋಡ್",
+        "settings_sub": "ನಿಮ್ಮ ಕೃಷಿ ವಿವರಗಳು ನಕ್ಷೆ, ಸಲಹೆ, ಬೆಲೆ ಮತ್ತು ಯೋಜನೆ ಹೊಂದಾಣಿಕೆಯನ್ನು ನಿರ್ಧರಿಸುತ್ತವೆ.",
+        "disease_sub": "ಎಲೆಯ ಫೋಟೋ ಅಪ್‌ಲೋಡ್ ಮಾಡಿ ಮಾದರಿ ರೋಗ ಗುರುತು ಮತ್ತು ಮುಂದಿನ ಕ್ರಮಗಳನ್ನು ನೋಡಿ.", "upload_label": "ಬೆಳೆ ಎಲೆಯ ಫೋಟೋ ಅಪ್‌ಲೋಡ್ ಮಾಡಿ ಅಥವಾ ತೆಗೆಯಿರಿ",
+        "crop_label": "ಫೋಟೋದಲ್ಲಿರುವ ಬೆಳೆ", "diagnose_button": "ಮಾದರಿ ಫಲಿತಾಂಶ ತೋರಿಸಿ", "sample_notice": "ಡೆಮೊ ಮಾತ್ರ: ಈ ಮಾದರಿ ಚಿತ್ರವನ್ನು ವಿಶ್ಲೇಷಿಸುವುದಿಲ್ಲ. ಫೈಲ್ ಆಧಾರಿತ ಉದಾಹರಣೆ ಫಲಿತಾಂಶ ತೋರಿಸುತ್ತದೆ; ಸ್ಥಳೀಯ ಕೃಷಿ ತಜ್ಞರಿಂದ ದೃಢಪಡಿಸಿ.",
+        "result_title": "ಮಾದರಿ ರೋಗ ಪತ್ತೆ ಫಲಿತಾಂಶ", "severity": "ತೀವ್ರತೆ", "organic": "ಸಾವಯವ / ಕೃಷಿ ಕ್ರಮಗಳು",
+        "chemical": "ರಾಸಾಯನಿಕ ನಿಯಂತ್ರಣ ಕ್ರಮಗಳು", "safety": "ಸಿಂಪಡಣೆ ಸುರಕ್ಷತೆ", "video": "ಚಿಕಿತ್ಸೆ ವೀಡಿಯೊ ಮಾರ್ಗದರ್ಶಿಗಳು",
+        "video_link": "YouTube ನಲ್ಲಿ ಚಿಕಿತ್ಸೆ ಮಾರ್ಗದರ್ಶಿ ಹುಡುಕಿ", "no_upload": "ಮಾದರಿ ಫಲಿತಾಂಶ ನೋಡಲು ಸ್ಪಷ್ಟ ಫೋಟೋ ಅಪ್‌ಲೋಡ್ ಮಾಡಿ.",
+    },
+    "മലയാളം (Malayalam)": {
+        "brand_sub": "വിള സംരക്ഷണവും അപകട സഹായിയും", "interface_language": "ഇന്റർഫേസ് ഭാഷ", "navigate": "നാവിഗേറ്റ് ചെയ്യുക",
+        "nav_dashboard": "ഡാഷ്ബോർഡ്", "nav_advisory": "നിർദ്ദേശങ്ങൾ", "nav_schemes": "പദ്ധതികൾ", "nav_settings": "ക്രമീകരണങ്ങൾ",
+        "nav_disease": "രോഗ നിർണയം", "emergency_sos": "🆘  അടിയന്തര സഹായം", "dashboard_title": "അഗ്നി സുരക്ഷ ഡാഷ്ബോർഡ്",
+        "dashboard_sub": "കൃഷി അപകടം, തത്സമയ കാലാവസ്ഥ, പ്രാദേശിക മുന്നറിയിപ്പുകൾ", "advisory_title": "നിർദ്ദേശങ്ങളും ഉപദേശവും",
+        "advisory_sub": "കാലാവസ്ഥാ അപകടങ്ങൾക്കുള്ള മുൻകരുതലുകളും വിൽപ്പന നിർദ്ദേശങ്ങളും.", "schemes_title": "പദ്ധതികൾ",
+        "schemes_sub": "നിങ്ങളുടെ കൃഷിക്ക് അനുയോജ്യമായ സബ്സിഡി, ഇൻഷുറൻസ്, ദുരിതാശ്വാസം.", "settings_title": "ക്രമീകരണങ്ങളും ഓഫ്‌ലൈൻ മോഡും",
+        "settings_sub": "നിങ്ങളുടെ കൃഷി വിവരങ്ങൾ മാപ്പ്, ഉപദേശം, വില, പദ്ധതി പൊരുത്തം എന്നിവ നിയന്ത്രിക്കുന്നു.",
+        "disease_sub": "ഇലയുടെ ചിത്രം അപ്‌ലോഡ് ചെയ്ത് മാതൃകാ രോഗനിർണയവും അടുത്ത നടപടികളും കാണുക.", "upload_label": "വിളയുടെ ഇലയുടെ ചിത്രം അപ്‌ലോഡ് ചെയ്യുക അല്ലെങ്കിൽ എടുക്കുക",
+        "crop_label": "ചിത്രത്തിലുള്ള വിള", "diagnose_button": "മാതൃകാ ഫലം കാണിക്കുക", "sample_notice": "ഡെമോ മാത്രം: ഈ മാതൃക ചിത്രം വിശകലനം ചെയ്യുന്നില്ല. ഫയലിനെ അടിസ്ഥാനമാക്കിയുള്ള ഉദാഹരണ ഫലമാണ്; പ്രാദേശിക കൃഷി വിദഗ്ധരോട് സ്ഥിരീകരിക്കുക.",
+        "result_title": "മാതൃകാ രോഗനിർണയ ഫലം", "severity": "തീവ്രത", "organic": "ജൈവ / കൃഷി നടപടികൾ",
+        "chemical": "രാസ നിയന്ത്രണ നടപടികൾ", "safety": "തളിക്കൽ സുരക്ഷ", "video": "ചികിത്സാ വീഡിയോ മാർഗ്ഗനിർദ്ദേശങ്ങൾ",
+        "video_link": "YouTube-ൽ ചികിത്സാ ട്യൂട്ടോറിയൽ കണ്ടെത്തുക", "no_upload": "മാതൃകാ ഫലം കാണാൻ വ്യക്തമായ ചിത്രം അപ്‌ലോഡ് ചെയ്യുക.",
+    },
+    "বাংলা (Bengali)": {
+        "brand_sub": "ফসল সুরক্ষা ও ঝুঁকি সহায়ক", "interface_language": "ইন্টারফেসের ভাষা", "navigate": "নেভিগেট করুন",
+        "nav_dashboard": "ড্যাশবোর্ড", "nav_advisory": "পরামর্শ", "nav_schemes": "প্রকল্প", "nav_settings": "সেটিংস",
+        "nav_disease": "রোগ শনাক্তকরণ", "emergency_sos": "🆘  জরুরি সহায়তা", "dashboard_title": "অগ্নি সুরক্ষা ড্যাশবোর্ড",
+        "dashboard_sub": "খামারের ঝুঁকি, সরাসরি আবহাওয়া ও স্থানীয় সতর্কতা", "advisory_title": "পরামর্শ ও নির্দেশিকা",
+        "advisory_sub": "আবহাওয়ার ঝুঁকি মোকাবিলার ধাপ এবং বিক্রির পরামর্শ।", "schemes_title": "প্রকল্প",
+        "schemes_sub": "আপনার খামারের জন্য উপযুক্ত ভর্তুকি, বিমা ও দুর্যোগ সহায়তা।", "settings_title": "সেটিংস ও অফলাইন মোড",
+        "settings_sub": "আপনার খামারের তথ্য মানচিত্র, পরামর্শ, দাম ও প্রকল্পের মিল নির্ধারণ করে।",
+        "disease_sub": "পাতার ছবি আপলোড করে নমুনা রোগ নির্ণয় ও পরবর্তী পদক্ষেপ দেখুন।", "upload_label": "ফসলের পাতার ছবি আপলোড করুন বা তুলুন",
+        "crop_label": "ছবির ফসল", "diagnose_button": "নমুনা ফলাফল দেখান", "sample_notice": "শুধু ডেমো: এই প্রোটোটাইপ ছবির পিক্সেল বিশ্লেষণ করে না। ফাইলের ভিত্তিতে নমুনা ফল দেখায়; স্থানীয় কৃষি বিশেষজ্ঞের সঙ্গে নিশ্চিত করুন।",
+        "result_title": "নমুনা রোগ নির্ণয়ের ফল", "severity": "তীব্রতা", "organic": "জৈব / চাষের পদক্ষেপ",
+        "chemical": "রাসায়নিক নিয়ন্ত্রণের ধাপ", "safety": "স্প্রে নিরাপত্তা", "video": "চিকিৎসার ভিডিও নির্দেশিকা",
+        "video_link": "YouTube-এ চিকিৎসার টিউটোরিয়াল খুঁজুন", "no_upload": "নমুনা ফল দেখতে পরিষ্কার ছবি আপলোড করুন।",
+    },
+    "मराठी (Marathi)": {
+        "brand_sub": "पीक सुरक्षा आणि जोखीम सहाय्यक", "interface_language": "इंटरफेस भाषा", "navigate": "नेव्हिगेट करा",
+        "nav_dashboard": "डॅशबोर्ड", "nav_advisory": "सूचना", "nav_schemes": "योजना", "nav_settings": "सेटिंग्ज",
+        "nav_disease": "रोग ओळख", "emergency_sos": "🆘  आपत्कालीन मदत", "dashboard_title": "अग्नी सुरक्षा डॅशबोर्ड",
+        "dashboard_sub": "शेतीची जोखीम, थेट हवामान आणि स्थानिक सूचना", "advisory_title": "सूचना आणि सल्ला",
+        "advisory_sub": "हवामानातील धोक्यांसाठी टप्प्याटप्प्याने उपाय आणि विक्री सूचना.", "schemes_title": "योजना",
+        "schemes_sub": "तुमच्या शेतीला योग्य अनुदान, विमा आणि आपत्ती मदत.", "settings_title": "सेटिंग्ज आणि ऑफलाइन मोड",
+        "settings_sub": "तुमची शेती प्रोफाइल नकाशा, सल्ला, दर आणि योजना जुळवते.",
+        "disease_sub": "पानाचा फोटो अपलोड करून नमुना रोगनिदान आणि पुढील उपाय पाहा.", "upload_label": "पिकाच्या पानाचा फोटो अपलोड करा किंवा काढा",
+        "crop_label": "फोटोतील पीक", "diagnose_button": "नमुना निदान दाखवा", "sample_notice": "फक्त डेमो: हा नमुना प्रतिमेचे विश्लेषण करत नाही. फाइलवरून उदाहरण दाखवतो; स्थानिक कृषी तज्ज्ञांकडून खात्री करा.",
+        "result_title": "नमुना रोगनिदान", "severity": "तीव्रता", "organic": "सेंद्रिय / शेती उपाय",
+        "chemical": "रासायनिक नियंत्रणाचे टप्पे", "safety": "फवारणी सुरक्षा", "video": "उपचार व्हिडिओ मार्गदर्शक",
+        "video_link": "YouTube वर उपचार मार्गदर्शक शोधा", "no_upload": "नमुना निकालासाठी स्पष्ट फोटो अपलोड करा.",
+    },
+    "ગુજરાતી (Gujarati)": {
+        "brand_sub": "પાક સુરક્ષા અને જોખમ સહાયક", "interface_language": "ઇન્ટરફેસ ભાષા", "navigate": "નેવિગેટ કરો",
+        "nav_dashboard": "ડેશબોર્ડ", "nav_advisory": "સૂચનો", "nav_schemes": "યોજનાઓ", "nav_settings": "સેટિંગ્સ",
+        "nav_disease": "રોગ ઓળખ", "emergency_sos": "🆘  તાત્કાલિક સહાય", "dashboard_title": "અગ્નિ સુરક્ષા ડેશબોર્ડ",
+        "dashboard_sub": "ખેતરનું જોખમ, જીવંત હવામાન અને સ્થાનિક ચેતવણીઓ", "advisory_title": "સૂચનો અને સલાહ",
+        "advisory_sub": "હવામાનના જોખમો માટે પગલાંવાર સાવચેતી અને વેચાણ સૂચનો.", "schemes_title": "યોજનાઓ",
+        "schemes_sub": "તમારા ખેતરને અનુરૂપ સબસિડી, વીમો અને આપત્તિ રાહત.", "settings_title": "સેટિંગ્સ અને ઑફલાઇન મોડ",
+        "settings_sub": "તમારી ખેતર પ્રોફાઇલ નકશો, સલાહ, ભાવ અને યોજના મેળાપ ચલાવે છે.",
+        "disease_sub": "પાંદડાનો ફોટો અપલોડ કરીને નમૂનાનું નિદાન અને આગળનાં પગલાં જુઓ.", "upload_label": "પાકના પાંદડાનો ફોટો અપલોડ કરો અથવા લો",
+        "crop_label": "ફોટામાંનો પાક", "diagnose_button": "નમૂનાનું નિદાન બતાવો", "sample_notice": "માત્ર ડેમો: આ પ્રોટોટાઇપ તસવીરનું વિશ્લેષણ કરતું નથી. ફાઇલ પરથી નમૂનો બતાવે છે; સ્થાનિક કૃષિ નિષ્ણાત સાથે ખાતરી કરો.",
+        "result_title": "નમૂના નિદાનનું પરિણામ", "severity": "તીવ્રતા", "organic": "જૈવિક / ખેતીનાં પગલાં",
+        "chemical": "રાસાયણિક નિયંત્રણનાં પગલાં", "safety": "છંટકાવ સલામતી", "video": "સારવારના વિડિયો માર્ગદર્શકો",
+        "video_link": "YouTube પર સારવારનું ટ્યુટોરિયલ શોધો", "no_upload": "નમૂનાનું પરિણામ જોવા સ્પષ્ટ ફોટો અપલોડ કરો.",
+    },
+    "ਪੰਜਾਬੀ (Punjabi)": {
+        "brand_sub": "ਫਸਲ ਸੁਰੱਖਿਆ ਅਤੇ ਜੋਖਮ ਸਹਾਇਕ", "interface_language": "ਇੰਟਰਫੇਸ ਭਾਸ਼ਾ", "navigate": "ਜਾਓ",
+        "nav_dashboard": "ਡੈਸ਼ਬੋਰਡ", "nav_advisory": "ਸੁਝਾਅ", "nav_schemes": "ਯੋਜਨਾਵਾਂ", "nav_settings": "ਸੈਟਿੰਗਾਂ",
+        "nav_disease": "ਬਿਮਾਰੀ ਦੀ ਪਛਾਣ", "emergency_sos": "🆘  ਐਮਰਜੈਂਸੀ ਮਦਦ", "dashboard_title": "ਅਗਨੀ ਸੁਰੱਖਿਆ ਡੈਸ਼ਬੋਰਡ",
+        "dashboard_sub": "ਖੇਤ ਦਾ ਜੋਖਮ, ਮੌਸਮ ਅਤੇ ਸਥਾਨਕ ਚੇਤਾਵਨੀਆਂ", "advisory_title": "ਸੁਝਾਅ ਅਤੇ ਸਲਾਹ",
+        "advisory_sub": "ਮੌਸਮੀ ਖਤਰਿਆਂ ਤੋਂ ਬਚਾਅ ਦੇ ਕਦਮ ਅਤੇ ਵਿਕਰੀ ਦੇ ਸੁਝਾਅ।", "schemes_title": "ਯੋਜਨਾਵਾਂ",
+        "schemes_sub": "ਤੁਹਾਡੇ ਖੇਤ ਲਈ ਢੁਕਵੀਂ ਸਬਸਿਡੀ, ਬੀਮਾ ਅਤੇ ਆਫ਼ਤ ਰਾਹਤ।", "settings_title": "ਸੈਟਿੰਗਾਂ ਅਤੇ ਆਫ਼ਲਾਈਨ ਮੋਡ",
+        "settings_sub": "ਤੁਹਾਡੀ ਖੇਤ ਪ੍ਰੋਫਾਈਲ ਨਕਸ਼ੇ, ਸਲਾਹ, ਕੀਮਤਾਂ ਅਤੇ ਯੋਜਨਾ ਮਿਲਾਣ ਨੂੰ ਚਲਾਉਂਦੀ ਹੈ।",
+        "disease_sub": "ਪੱਤੇ ਦੀ ਤਸਵੀਰ ਅੱਪਲੋਡ ਕਰਕੇ ਨਮੂਨਾ ਜਾਂਚ ਅਤੇ ਅਗਲੇ ਕਦਮ ਵੇਖੋ।", "upload_label": "ਫਸਲ ਦੇ ਪੱਤੇ ਦੀ ਤਸਵੀਰ ਅੱਪਲੋਡ ਕਰੋ ਜਾਂ ਖਿੱਚੋ",
+        "crop_label": "ਤਸਵੀਰ ਵਿੱਚ ਫਸਲ", "diagnose_button": "ਨਮੂਨਾ ਨਤੀਜਾ ਦਿਖਾਓ", "sample_notice": "ਸਿਰਫ਼ ਡੈਮੋ: ਇਹ ਪ੍ਰੋਟੋਟਾਈਪ ਤਸਵੀਰ ਦਾ ਵਿਸ਼ਲੇਸ਼ਣ ਨਹੀਂ ਕਰਦਾ। ਫਾਈਲ ਦੇ ਆਧਾਰ 'ਤੇ ਨਮੂਨਾ ਦਿੰਦਾ ਹੈ; ਸਥਾਨਕ ਖੇਤੀ ਮਾਹਰ ਤੋਂ ਪੁਸ਼ਟੀ ਕਰੋ।",
+        "result_title": "ਨਮੂਨਾ ਜਾਂਚ ਨਤੀਜਾ", "severity": "ਗੰਭੀਰਤਾ", "organic": "ਜੈਵਿਕ / ਖੇਤੀ ਕਦਮ",
+        "chemical": "ਰਸਾਇਣਕ ਕੰਟਰੋਲ ਦੇ ਕਦਮ", "safety": "ਛਿੜਕਾਅ ਸੁਰੱਖਿਆ", "video": "ਇਲਾਜ ਵੀਡੀਓ ਗਾਈਡ",
+        "video_link": "YouTube 'ਤੇ ਇਲਾਜ ਟਿਊਟੋਰਿਅਲ ਲੱਭੋ", "no_upload": "ਨਮੂਨਾ ਨਤੀਜੇ ਲਈ ਸਾਫ਼ ਤਸਵੀਰ ਅੱਪਲੋਡ ਕਰੋ।",
+    },
+    "ଓଡ଼ିଆ (Odia)": {
+        "brand_sub": "ଫସଲ ସୁରକ୍ଷା ଓ ବିପଦ ସହାୟକ", "interface_language": "ଇଣ୍ଟରଫେସ୍ ଭାଷା", "navigate": "ଯାଆନ୍ତୁ",
+        "nav_dashboard": "ଡ୍ୟାସବୋର୍ଡ", "nav_advisory": "ପରାମର୍ଶ", "nav_schemes": "ଯୋଜନା", "nav_settings": "ସେଟିଂସ୍",
+        "nav_disease": "ରୋଗ ଚିହ୍ନଟ", "emergency_sos": "🆘  ଜରୁରୀ ସହାୟତା", "dashboard_title": "ଅଗ୍ନି ସୁରକ୍ଷା ଡ୍ୟାସବୋର୍ଡ",
+        "dashboard_sub": "ଚାଷ ଜମିର ବିପଦ, ପାଣିପାଗ ଓ ସ୍ଥାନୀୟ ସତର୍କତା", "advisory_title": "ପରାମର୍ଶ ଓ ଉପଦେଶ",
+        "advisory_sub": "ପାଣିପାଗ ବିପଦ ପାଇଁ ପଦକ୍ଷେପ ଏବଂ ବିକ୍ରୟ ପରାମର୍ଶ।", "schemes_title": "ଯୋଜନା",
+        "schemes_sub": "ଆପଣଙ୍କ ଚାଷ ପାଇଁ ଉପଯୁକ୍ତ ସହାୟତା, ବୀମା ଓ ବିପର୍ଯ୍ୟୟ ରିଲିଫ୍।", "settings_title": "ସେଟିଂସ୍ ଓ ଅଫଲାଇନ୍ ମୋଡ୍",
+        "settings_sub": "ଆପଣଙ୍କ ଚାଷ ପ୍ରୋଫାଇଲ୍ ମାନଚିତ୍ର, ପରାମର୍ଶ, ମୂଲ୍ୟ ଓ ଯୋଜନା ମେଳକୁ ଚଳାଏ।",
+        "disease_sub": "ପତ୍ରର ଫଟୋ ଅପଲୋଡ୍ କରି ନମୁନା ରୋଗ ଚିହ୍ନଟ ଓ ପରବର୍ତ୍ତୀ ପଦକ୍ଷେପ ଦେଖନ୍ତୁ।", "upload_label": "ଫସଲ ପତ୍ରର ଫଟୋ ଅପଲୋଡ୍ କରନ୍ତୁ କିମ୍ବା ନିଅନ୍ତୁ",
+        "crop_label": "ଫଟୋର ଫସଲ", "diagnose_button": "ନମୁନା ଫଳାଫଳ ଦେଖାନ୍ତୁ", "sample_notice": "କେବଳ ଡେମୋ: ଏହି ପ୍ରୋଟୋଟାଇପ୍ ଫଟୋ ବିଶ୍ଳେଷଣ କରେ ନାହିଁ। ଫାଇଲ୍ ଆଧାରରେ ନମୁନା ଦେଖାଏ; ସ୍ଥାନୀୟ କୃଷି ବିଶେଷଜ୍ଞଙ୍କଠାରୁ ନିଶ୍ଚିତ କରନ୍ତୁ।",
+        "result_title": "ନମୁନା ରୋଗ ଚିହ୍ନଟ ଫଳ", "severity": "ତୀବ୍ରତା", "organic": "ଜୈବିକ / ଚାଷ ପଦକ୍ଷେପ",
+        "chemical": "ରାସାୟନିକ ନିୟନ୍ତ୍ରଣ ପଦକ୍ଷେପ", "safety": "ସ୍ପ୍ରେ ସୁରକ୍ଷା", "video": "ଚିକିତ୍ସା ଭିଡିଓ ମାର୍ଗଦର୍ଶିକା",
+        "video_link": "YouTubeରେ ଚିକିତ୍ସା ଟ୍ୟୁଟୋରିଆଲ୍ ଖୋଜନ୍ତୁ", "no_upload": "ନମୁନା ଫଳ ଦେଖିବାକୁ ସ୍ପଷ୍ଟ ଫଟୋ ଅପଲୋଡ୍ କରନ୍ତୁ।",
+    },
+}
+for _language, _camera_label in {
+    "English": "Take a leaf photo",
+    "हिन्दी (Hindi)": "पत्ती की तस्वीर लें",
+    "தமிழ் (Tamil)": "இலையின் படத்தை எடுக்கவும்",
+    "తెలుగు (Telugu)": "ఆకు ఫోటో తీయండి",
+    "ಕನ್ನಡ (Kannada)": "ಎಲೆಯ ಫೋಟೋ ತೆಗೆಯಿರಿ",
+    "മലയാളം (Malayalam)": "ഇലയുടെ ചിത്രം എടുക്കുക",
+    "বাংলা (Bengali)": "পাতার ছবি তুলুন",
+    "मराठी (Marathi)": "पानाचा फोटो काढा",
+    "ગુજરાતી (Gujarati)": "પાંદડાનો ફોટો લો",
+    "ਪੰਜਾਬੀ (Punjabi)": "ਪੱਤੇ ਦੀ ਤਸਵੀਰ ਖਿੱਚੋ",
+    "ଓଡ଼ିଆ (Odia)": "ପତ୍ରର ଫଟୋ ନିଅନ୍ତୁ",
+}.items():
+    UI_TEXT[_language]["camera_label"] = _camera_label
+
+
+def tr(key):
+    """Translate a key interface label, falling back to English for untranslated copy."""
+    language = st.session_state.get("ui_language", "English")
+    return UI_TEXT.get(language, UI_TEXT["English"]).get(key, UI_TEXT["English"].get(key, key))
 
 
 def h(s: str) -> str:
@@ -892,18 +1081,18 @@ def rules_panel():
 
 # ───────────────────────────── Notifications, dispatch, SOS ─────────────────────────────
 L10N = {
-    "English": dict(alert="SatCrop {tag}: {hz} risk near your farm {when}. {detail}. Open the app for steps.",
-                    sos="SatCrop SOS from {name} at {lat:.4f}, {lon:.4f}. Please call back.",
-                    test="SatCrop test message. Alerts are working.", hz={},
+    "English": dict(alert="agri Suraksha {tag}: {hz} risk near your farm {when}. {detail}. Open the app for steps.",
+                    sos="agri Suraksha SOS from {name} at {lat:.4f}, {lon:.4f}. Please call back.",
+                    test="agri Suraksha test message. Alerts are working.", hz={},
                     when={0: "today", 1: "tomorrow", "n": "in {n} days"}),
-    "தமிழ் (Tamil)": dict(alert="SatCrop {tag}: உங்கள் பண்ணை அருகே {when} {hz} அபாயம் ({num}). வழிமுறைகளுக்கு செயலியைத் திறக்கவும்.",
-                         sos="SatCrop அவசர உதவி: {name} ({lat:.4f}, {lon:.4f}). உடனே தொடர்பு கொள்ளவும்.",
-                         test="SatCrop சோதனை செய்தி. எச்சரிக்கைகள் செயல்படுகின்றன.",
+    "தமிழ் (Tamil)": dict(alert="agri Suraksha {tag}: உங்கள் பண்ணை அருகே {when} {hz} அபாயம் ({num}). வழிமுறைகளுக்கு செயலியைத் திறக்கவும்.",
+                         sos="agri Suraksha அவசர உதவி: {name} ({lat:.4f}, {lon:.4f}). உடனே தொடர்பு கொள்ளவும்.",
+                         test="agri Suraksha சோதனை செய்தி. எச்சரிக்கைகள் செயல்படுகின்றன.",
                          hz={"Drought": "வறட்சி", "Flood": "வெள்ளம்", "Cyclone": "புயல்", "Pest Outbreak": "பூச்சித் தாக்குதல்", "High Winds": "பலத்த காற்று"},
                          when={0: "இன்று", 1: "நாளை", "n": "{n} நாட்களில்"}),
-    "हिन्दी (Hindi)": dict(alert="SatCrop {tag}: आपके खेत के पास {when} {hz} का खतरा ({num})। जानकारी के लिए ऐप खोलें।",
-                          sos="SatCrop आपातकालीन सहायता: {name} ({lat:.4f}, {lon:.4f}). कृपया तुरंत संपर्क करें।",
-                          test="SatCrop परीक्षण संदेश। अलर्ट काम कर रहे हैं।",
+    "हिन्दी (Hindi)": dict(alert="agri Suraksha {tag}: आपके खेत के पास {when} {hz} का खतरा ({num})। जानकारी के लिए ऐप खोलें।",
+                          sos="agri Suraksha आपातकालीन सहायता: {name} ({lat:.4f}, {lon:.4f}). कृपया तुरंत संपर्क करें।",
+                          test="agri Suraksha परीक्षण संदेश। अलर्ट काम कर रहे हैं।",
                           hz={"Drought": "सूखा", "Flood": "बाढ़", "Cyclone": "चक्रवात", "Pest Outbreak": "कीट प्रकोप", "High Winds": "तेज़ हवाएँ"},
                           when={0: "आज", 1: "कल", "n": "{n} दिन में"}),
 }
@@ -987,7 +1176,7 @@ def sos_dialog():
 
 def ticker(alerts, note=None):
     items = [f"{HAZARDS[a['hazard']]['icon']} {a['title']}: {a['text']}" for a in alerts] or \
-            [note or "All clear. SatCrop is checking the live forecast for your farm."]
+            [note or "All clear. agri Suraksha is checking the live forecast for your farm."]
     txt = "     •     ".join(items)
     st.markdown(h(f'<div class="ticker"><div class="ticker-track" style="animation-duration:{max(25, len(txt) // 5)}s">{esc(txt)}</div></div>'),
                 unsafe_allow_html=True)
@@ -1268,7 +1457,7 @@ def survey_panel(onboarding=False):
         return
     if onboarding:
         st.markdown("**Welcome. Start by linking your land record**")
-        st.caption("Enter your RTC or survey number and SatCrop loads your farm boundary, location and crop details.")
+        st.caption("Enter your RTC or survey number and Agri Suraksha loads your farm boundary, location and crop details.")
     c1, c2 = st.columns([3, 1.4], vertical_alignment="bottom")
     with c1:
         persist(st.text_input, "RTC / Survey number", "p_survey_input", DEFAULTS["p_survey_input"],
@@ -1283,11 +1472,132 @@ def survey_panel(onboarding=False):
 
 # ───────────────────────────── UI pieces ─────────────────────────────
 def page_header(title, sub):
+    translations = {
+        "Suggestions and advisory": ("advisory_title", "advisory_sub"),
+        "Schemes": ("schemes_title", "schemes_sub"),
+        "Settings and offline mode": ("settings_title", "settings_sub"),
+    }
+    if title in translations:
+        title_key, sub_key = translations[title]
+        title, sub = tr(title_key), tr(sub_key)
     st.markdown(f'<p class="page-title">{esc(title)}</p><p class="page-sub">{esc(sub)}</p>', unsafe_allow_html=True)
+
+
+DISEASE_SAMPLES = [
+    {
+        "name": "Blight",
+        "description": "A common fungal disease group. Tomato and potato blights can cause expanding dark lesions and rapid leaf decline.",
+        "organic": [
+            "Remove badly affected leaves and plant debris; bag and discard them rather than composting infected material.",
+            "Keep foliage dry: water at soil level, mulch to reduce soil splash, and improve spacing for airflow.",
+            "Rotate away from susceptible crops and clean tools before moving between plants.",
+        ],
+        "chemical": [
+            "Ask your local KVK or agriculture officer to confirm the disease and a product registered for this crop.",
+            "If treatment is advised, use only the labelled product and dose; cover the crop as directed and observe repeat intervals.",
+            "Record the product and date, and follow the label's pre-harvest and restricted-entry intervals.",
+        ],
+        "video_query": "ICAR tomato early blight management safe fungicide application",
+    },
+    {
+        "name": "Rust",
+        "description": "Rust fungi often leave orange, brown or reddish powdery pustules on leaves; several crops have different rust diseases.",
+        "organic": [
+            "Remove heavily infected leaves where practical and clear volunteer plants that can carry the disease.",
+            "Avoid crowding, reduce long periods of leaf wetness, and clean tools after handling infected plants.",
+            "Check nearby plants regularly so a local extension worker can confirm the crop-specific rust early.",
+        ],
+        "chemical": [
+            "Confirm which rust affects the crop with a KVK or agriculture officer before choosing a spray.",
+            "Use only a fungicide currently registered for that crop and disease, exactly at its label rate and timing.",
+            "Do not repeat the same mode of action beyond label guidance; observe harvest and re-entry intervals.",
+        ],
+        "video_query": "ICAR crop rust disease identification and safe management fungicide application",
+    },
+    {
+        "name": "Powdery mildew",
+        "description": "Powdery mildew commonly appears as white, flour-like patches on leaf surfaces and young growth.",
+        "organic": [
+            "Remove the worst affected leaves and open up dense growth to improve air movement.",
+            "Avoid excess nitrogen, disinfect pruning tools, and monitor new growth every few days.",
+            "Use a biological or other low-impact product only when it is approved for the crop and label directions are available.",
+        ],
+        "chemical": [
+            "Ask a local extension specialist to verify the disease and recommend a crop-approved option.",
+            "If a labelled fungicide is recommended, apply at the stated dose and avoid spraying in unsuitable heat or weather.",
+            "Follow the product label for protective equipment, repeat timing, re-entry, and pre-harvest intervals.",
+        ],
+        "video_query": "ICAR powdery mildew management crop safe spray application",
+    },
+]
+DISEASE_CROPS = ["Tomato", "Potato", "Wheat", "Groundnut", "Cotton", "Grape", "Cucumber", "Other"]
+
+
+def page_disease_detection():
+    page_header(tr("nav_disease"), tr("disease_sub"))
+    st.info(tr("sample_notice"))
+    left, right = st.columns([3, 2], gap="large")
+    with left:
+        file_upload = st.file_uploader(tr("upload_label"), type=["jpg", "jpeg", "png", "webp"], key="disease_leaf_upload")
+    with right:
+        camera_upload = st.camera_input(tr("camera_label"), key="disease_camera")
+        initial_crop = P("p_crop") if P("p_crop") in DISEASE_CROPS else "Tomato"
+        crop = st.selectbox(tr("crop_label"), DISEASE_CROPS, index=DISEASE_CROPS.index(initial_crop), key="disease_crop")
+    uploaded = camera_upload or file_upload
+
+    if uploaded is None:
+        st.caption(tr("no_upload"))
+        return
+
+    image_bytes = uploaded.getvalue()
+    st.image(image_bytes, caption=f"{crop} leaf photo")
+    file_signature = zlib.crc32(image_bytes)
+    st.caption("Supported image types: JPG, PNG and WebP.")
+    if st.button(tr("diagnose_button"), type="primary", key="disease_sample_diagnose"):
+        st.session_state["disease_sample_signature"] = file_signature
+
+    if st.session_state.get("disease_sample_signature") != file_signature:
+        return
+
+    # Stable sample selection for a given file; this is intentionally not an image model.
+    sample = DISEASE_SAMPLES[file_signature % len(DISEASE_SAMPLES)]
+    severity_index = (file_signature >> 5) % 3
+    severities = [("Low", "🟢"), ("Moderate", "🟠"), ("High", "🔴")]
+    severity, marker = severities[severity_index]
+
+    st.divider()
+    st.subheader(tr("result_title"))
+    with st.container(border=True):
+        st.markdown(f"### {marker} {sample['name']}")
+        st.metric(tr("severity"), severity)
+        st.write(sample["description"])
+        st.caption("Sample result · not a confirmed diagnosis")
+
+    organic_col, chemical_col = st.columns(2, gap="large")
+    with organic_col:
+        with st.container(border=True):
+            st.markdown(f"#### {tr('organic')}")
+            for step in sample["organic"]:
+                st.markdown(f"- {step}")
+    with chemical_col:
+        with st.container(border=True):
+            st.markdown(f"#### {tr('chemical')}")
+            for step in sample["chemical"]:
+                st.markdown(f"- {step}")
+
+    st.markdown(f"#### {tr('safety')}")
+    st.warning("Use only products registered for this crop and disease. Follow the label dose, PPE, re-entry and pre-harvest intervals. Never mix products; ask your local KVK or agriculture officer if unsure.")
+
+    st.markdown(f"#### {tr('video')}")
+    query = quote_plus(f"{crop} {sample['video_query']}")
+    video_url = f"https://www.youtube.com/results?search_query={query}"
+    st.link_button(tr("video_link"), video_url)
+    st.caption("The link opens matching YouTube tutorials. Check the creator's credentials and use local product labels for spray guidance.")
 
 
 # ───────────────────────────── Pages ─────────────────────────────
 def page_dashboard():
+    page_header(tr("dashboard_title"), tr("dashboard_sub"))
     onboard, hero, sos, wxc, kpi = st.container(), st.container(), st.container(), st.container(), st.container()
     left, right = st.columns([3, 2], gap="large")
 
@@ -1325,7 +1635,7 @@ def page_dashboard():
         c1, c2 = st.columns([2, 5], vertical_alignment="center")
         with c1:
             with st.container(key="sos_main"):
-                if st.button("🆘  Emergency SOS", key="sos_btn", **STRETCH):
+                if st.button(tr("emergency_sos"), key="sos_btn", **STRETCH):
                     sos_dialog()
         c2.markdown('<div class="sos-note">Fire, flood rescue, injury or a crop emergency? Open helplines and alert your contacts with your farm location.</div>',
                     unsafe_allow_html=True)
@@ -1578,7 +1888,7 @@ def page_settings():
         with a:
             persist(st.text_input, "Mobile number for alerts", "p_phone", "", placeholder="+91 ...")
             persist(st.selectbox, "Language for SMS and voice alerts", "p_lang", "English", options=list(L10N))
-            st.caption("Dispatched alert messages use this language. Menus and advisory text stay in English in this demo.")
+            st.caption("Dispatched alert messages use this language. The sidebar selector controls key interface labels.")
             persist(st.select_slider, "Alert feed refresh (seconds)", "s_refresh", 10, options=[5, 10, 20, 30])
         with b:
             st.markdown("**Channels**")
@@ -1614,15 +1924,21 @@ def page_settings():
 
 
 # ───────────────────────────── Navigation ─────────────────────────────
-NAV = {"Dashboard": ("🗺️", page_dashboard), "Suggestions & Advisory": ("🌱", page_advice),
-       "Schemes": ("🏛️", page_schemes), "Settings": ("⚙️", page_settings)}
+NAV = {
+    "Dashboard": ("🗺️", "nav_dashboard", page_dashboard),
+    "Suggestions & Advisory": ("🌱", "nav_advisory", page_advice),
+    "Schemes": ("🏛️", "nav_schemes", page_schemes),
+    "Settings": ("⚙️", "nav_settings", page_settings),
+    "Disease Detection": ("🧪", "nav_disease", page_disease_detection),
+}
 
 with st.sidebar:
-    st.markdown('<div class="brand">🛰️ SatCrop</div><div class="brand-sub">Digital Twin and Multi-Hazard Assistant</div>', unsafe_allow_html=True)
-    page = st.radio("Navigate", list(NAV), format_func=lambda k: f"{NAV[k][0]}  {k}", key="nav", label_visibility="collapsed")
+    st.markdown(f'<div class="brand">🌱 Agri Suraksha</div><div class="brand-sub">{esc(tr("brand_sub"))}</div>', unsafe_allow_html=True)
+    persist(st.selectbox, tr("interface_language"), "ui_language", "English", options=UI_LANGUAGES)
+    page = st.radio(tr("navigate"), list(NAV), format_func=lambda k: f"{NAV[k][0]}  {tr(NAV[k][1])}", key="nav", label_visibility="collapsed")
     st.write("")
     with st.container(key="sos_side"):
-        if st.button("🆘  Emergency SOS", key="sos_btn_side", **STRETCH):
+        if st.button(tr("emergency_sos"), key="sos_btn_side", **STRETCH):
             sos_dialog()
     try:
         S0 = sim()
@@ -1635,7 +1951,7 @@ with st.sidebar:
         pass
 
 try:
-    NAV[page][1]()
+    NAV[page][2]()
 except Exception as exc:  # last line of defence so a live demo never shows a traceback
     st.error("Something went wrong while loading this page. Your data is safe. Try another page or reload.")
     with st.expander("Technical details"):
