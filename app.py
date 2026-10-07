@@ -20,7 +20,7 @@ import requests
 import streamlit as st
 from streamlit_folium import st_folium
 
-st.set_page_config(page_title="agri Suraksha", page_icon="🔥",
+st.set_page_config(page_title="Agri Suraksha", page_icon="🔥",
                    layout="wide", initial_sidebar_state="expanded")
 
 _VER = tuple(int(x) for x in st.__version__.split(".")[:2] if x.isdigit())
